@@ -23,12 +23,54 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class Catalog {
 
+    public class Table {
+
+        private DbFile file;
+
+        private String name;
+
+        private String pkeyField; // Primary Key Field 主键字段
+
+        public Table(DbFile file, String name, String pkeyField) {
+            this.file = file;
+            this.name = name;
+            this.pkeyField = pkeyField;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public DbFile getFile() {
+            return file;
+        }
+
+        public String getPkeyField() {
+            return pkeyField;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public void setFile(DbFile file) {
+            this.file = file;
+        }
+
+        public void setPkeyField(String pkeyField) {
+            this.pkeyField = pkeyField;
+        }
+    }
+
+    private ConcurrentHashMap<Integer, Table> tables;
+
     /**
      * Constructor.
      * Creates a new, empty catalog.
      */
     public Catalog() {
         // some code goes here
+        tables = new ConcurrentHashMap<>();
     }
 
     /**
@@ -42,6 +84,8 @@ public class Catalog {
      */
     public void addTable(DbFile file, String name, String pkeyField) {
         // some code goes here
+        Table table = new Table(file, name, pkeyField);
+        tables.put(file.getId(), table);
     }
 
     public void addTable(DbFile file, String name) {
@@ -65,7 +109,13 @@ public class Catalog {
      */
     public int getTableId(String name) throws NoSuchElementException {
         // some code goes here
-        return 0;
+        // 遍历所有键值对
+        for (Map.Entry<Integer, Table> entry : tables.entrySet()) {
+            if (entry.getValue().getName().equals(name)) {
+                return entry.getKey();
+            }
+        }
+        throw new NoSuchElementException("没有找到名为 " + name + " 的表。");
     }
 
     /**
@@ -76,7 +126,10 @@ public class Catalog {
      */
     public TupleDesc getTupleDesc(int tableid) throws NoSuchElementException {
         // some code goes here
-        return null;
+        if (tables.containsKey(tableid)) {
+            return tables.get(tableid).getFile().getTupleDesc();
+        }
+        throw new NoSuchElementException();
     }
 
     /**
@@ -87,30 +140,42 @@ public class Catalog {
      */
     public DbFile getDatabaseFile(int tableid) throws NoSuchElementException {
         // some code goes here
-        return null;
+        if (tables.containsKey(tableid)) {
+            return tables.get(tableid).getFile();
+        }
+        throw new NoSuchElementException();
     }
 
     public String getPrimaryKey(int tableid) {
         // some code goes here
-        return null;
+        if (tables.containsKey(tableid)) {
+            return tables.get(tableid).getPkeyField();
+        }
+        throw new NoSuchElementException();
     }
 
     public Iterator<Integer> tableIdIterator() {
         // some code goes here
-        return null;
+        return tables.keySet().iterator();
     }
 
     public String getTableName(int id) {
         // some code goes here
-        return null;
+        if (tables.containsKey(id)) {
+            return tables.get(id).getName();
+        }
+        throw new NoSuchElementException();
     }
-    
+
     /** Delete all tables from the catalog */
     public void clear() {
         // some code goes here
+        tables.clear();
     }
-    
+
     /**
+     * 从文件中读取模式，并在数据库中创建相应的表。
+     * <p>
      * Reads the schema from a file and creates the appropriate tables in the database.
      * @param catalogFile
      */
@@ -119,7 +184,7 @@ public class Catalog {
         String baseFolder=new File(new File(catalogFile).getAbsolutePath()).getParent();
         try {
             BufferedReader br = new BufferedReader(new FileReader(catalogFile));
-            
+
             while ((line = br.readLine()) != null) {
                 //assume line is of the format name (field type, field type, ...)
                 String name = line.substring(0, line.indexOf("(")).trim();
