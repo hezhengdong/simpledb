@@ -13,15 +13,21 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>
  * Provides a set of methods that can be used to access these variables from
  * anywhere.
+ * <p>
+ * 该类的主要功能是初始化数据库系统中用到的静态变量（目录、缓冲池、日志文件），并提供全局访问方法。
  * 
- * @Threadsafe
+ * @Threadsafe 表明该类线程安全
  */
 public class Database {
+    // 单例模式、线程安全
     private static final AtomicReference<Database> _instance = new AtomicReference<>(new Database());
+    // 目录
     private final Catalog _catalog;
+    // 缓冲池
     private final BufferPool _bufferpool;
 
     private final static String LOGFILENAME = "log";
+    // 日志文件
     private final LogFile _logfile;
 
     private Database() {
@@ -53,6 +59,7 @@ public class Database {
         return _instance.get()._catalog;
     }
 
+    // 下面两个方法仅用于单元测试，一个是通过反射重置缓冲池，一个是重置整个数据库实例
     /**
      * Method used for testing -- create a new instance of the buffer pool and
      * return it
