@@ -1,9 +1,21 @@
 package simpledb.storage;
 
-/** Unique identifier for HeapPage objects. */
+import java.util.Objects;
+
+/**
+ * Unique identifier for HeapPage objects.
+ * <p>
+ * HeapPage 对象的唯一标识符
+ */
 public class HeapPageId implements PageId {
 
+    private final int tableId;
+
+    private final int pgNo;
+
     /**
+     * 构造函数。为特定表格的特定页面创建一个
+     * <p>
      * Constructor. Create a page id structure for a specific page of a
      * specific table.
      *
@@ -12,12 +24,14 @@ public class HeapPageId implements PageId {
      */
     public HeapPageId(int tableId, int pgNo) {
         // some code goes here
+        this.tableId = tableId;
+        this.pgNo = pgNo;
     }
 
     /** @return the table associated with this PageId */
     public int getTableId() {
         // some code goes here
-        return 0;
+        return tableId;
     }
 
     /**
@@ -26,10 +40,15 @@ public class HeapPageId implements PageId {
      */
     public int getPageNumber() {
         // some code goes here
-        return 0;
+        return pgNo;
     }
 
     /**
+     * equal 为 true，hashCode 必然为 true
+     * <p>
+     * equal 为 false，hashCode 大概率为 false，小概率为 true
+     * <p>
+     * Hash 算法，相同输入得到相同输出，不同输入得到不同输出
      * @return a hash code for this page, represented by a combination of
      *   the table number and the page number (needed if a PageId is used as a
      *   key in a hash table in the BufferPool, for example.)
@@ -37,7 +56,7 @@ public class HeapPageId implements PageId {
      */
     public int hashCode() {
         // some code goes here
-        throw new UnsupportedOperationException("implement this");
+        return Objects.hash(tableId, pgNo);
     }
 
     /**
@@ -49,6 +68,10 @@ public class HeapPageId implements PageId {
      */
     public boolean equals(Object o) {
         // some code goes here
+        // 原理见 https://liaoxuefeng.com/books/java/collection/equals/index.html
+        if (o instanceof PageId pi) {
+            return Objects.equals(this.tableId, pi.getTableId()) && Objects.equals(this.pgNo, pi.getPageNumber());
+        }
         return false;
     }
 
