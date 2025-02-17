@@ -20,10 +20,10 @@ public class SeqScan implements OpIterator {
 
     private static final long serialVersionUID = 1L;
 
-    private final TransactionId transactionId;
-    private int tableId;
-    private String tableAlias;
-    private DbFileIterator dbFileIterator;
+    private final TransactionId transactionId; // 事务ID（保证读取一致性）
+    private int tableId;                       // 要扫描的表ID
+    private String tableAlias;                 // 表别名（用于字段名前缀）
+    private DbFileIterator dbFileIterator;     // 实际执行扫描的迭代器
 
     /**
      * Creates a sequential scan over the specified table as a part of the
