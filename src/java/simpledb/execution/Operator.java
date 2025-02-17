@@ -39,6 +39,8 @@ public abstract class Operator implements OpIterator {
     }
 
     /**
+     * 返回迭代器中的下一个 Tuple，如果迭代结束，则返回 null。操作符使用此方法实现 <code>next</code> 和 <code>hasNext</code>。
+     * <p>
      * Returns the next Tuple in the iterator, or null if the iteration is
      * finished. Operator uses this method to implement both <code>next</code>
      * and <code>hasNext</code>.
@@ -59,9 +61,9 @@ public abstract class Operator implements OpIterator {
         this.open = false;
     }
 
-    private Tuple next = null;
-    private boolean open = false;
-    private int estimatedCardinality = 0;
+    private Tuple next = null; // 预取的下一个元组
+    private boolean open = false; // 操作符是否已开启
+    private int estimatedCardinality = 0; // 预估结果集大小（用于优化）
 
     public void open() throws DbException, TransactionAbortedException {
         this.open = true;
