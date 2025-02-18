@@ -1,11 +1,14 @@
 package simpledb.execution;
 
 import simpledb.common.DbException;
+import simpledb.common.Type;
 import simpledb.storage.Tuple;
 import simpledb.storage.TupleDesc;
 import simpledb.transaction.TransactionAbortedException;
 
 import java.util.NoSuchElementException;
+
+import static simpledb.execution.Aggregator.NO_GROUPING;
 
 
 /**
@@ -16,6 +19,14 @@ import java.util.NoSuchElementException;
 public class Aggregate extends Operator {
 
     private static final long serialVersionUID = 1L;
+
+    private OpIterator child;        // 输入数据的迭代器，即聚合操作的源数据
+    private final int afield;        // 要聚合的字段在输入元组中的索引
+    private final int gfield;        // 分组字段的索引（如果没有分组，则为 NO_GROUPING）
+    private final Aggregator.Op aop; // 聚合操作类型（如 SUM）
+    private Aggregator aggregator;   // 聚合器对象（如 IntegerAggregator）
+    private OpIterator aggIterator;  // 聚合结果的迭代器，遍历聚合后的结果
+    private TupleDesc td;            // 结果元组的描述，定义聚合结果的字段和类型
 
     /**
      * Constructor.
@@ -31,7 +42,24 @@ public class Aggregate extends Operator {
      * @param aop    The aggregation operator to use
      */
     public Aggregate(OpIterator child, int afield, int gfield, Aggregator.Op aop) {
-        // some code goes here
+        this.child = child;
+        this.afield = afield;
+        this.gfield = gfield;
+        this.aop = aop;
+        
+        // 确定分组字段类型
+        Type gbtype = gfield == NO_GROUPING ? null : child.getTupleDesc().getFieldType(gfield);
+
+        // 根据字段类型选择聚合器
+        Type afieldType = child.getTupleDesc().getFieldType(afield);
+        if (afieldType == Type.STRING_TYPE) {
+            if (aop != Aggregator.Op.COUNT) {
+                throw new IllegalArgumentException("String aggregation only supports COUNT");
+            }
+            this.aggregator = new StringAggregator(gfield, gbtype, afield, aop);
+        } else {
+            this.aggregator = new IntegerAggregator(gfield, gbtype, afield, aop);
+        }
     }
 
     /**
@@ -40,8 +68,7 @@ public class Aggregate extends Operator {
      * {@link Aggregator#NO_GROUPING}
      */
     public int groupField() {
-        // some code goes here
-        return -1;
+        return gfield;
     }
 
     /**
@@ -50,16 +77,14 @@ public class Aggregate extends Operator {
      * null;
      */
     public String groupFieldName() {
-        // some code goes here
-        return null;
+        return gfield == NO_GROUPING ? null : child.getTupleDesc().getFieldName(gfield);
     }
 
     /**
      * @return the aggregate field
      */
     public int aggregateField() {
-        // some code goes here
-        return -1;
+        return afield;
     }
 
     /**
@@ -67,28 +92,45 @@ public class Aggregate extends Operator {
      * tuples
      */
     public String aggregateFieldName() {
-        // some code goes here
-        return null;
+        return child.getTupleDesc().getFieldName(afield);
     }
 
     /**
      * @return return the aggregate operator
      */
     public Aggregator.Op aggregateOp() {
-        // some code goes here
-        return null;
+        return aop;
     }
 
+    /**
+     * 将聚合操作符转换为字符串
+     * @param aop
+     * @return
+     */
     public static String nameOfAggregatorOp(Aggregator.Op aop) {
         return aop.toString();
     }
 
     public void open() throws NoSuchElementException, DbException,
             TransactionAbortedException {
-        // some code goes here
+        super.open();
+        child.open();
+        
+        // 处理所有元组，执行聚合操作
+        while (child.hasNext()) {
+            Tuple t = child.next();
+            aggregator.mergeTupleIntoGroup(t);
+        }
+        child.close();
+
+        // 获取并打开聚合结果的迭代器
+        aggIterator = aggregator.iterator();
+        aggIterator.open();
     }
 
     /**
+     * 返回聚合结果中的下一个元组。如果聚合结果的迭代器有下一个元组，则返回它；否则返回 null。
+     * <p>
      * Returns the next tuple. If there is a group by field, then the first
      * field is the field by which we are grouping, and the second field is the
      * result of computing the aggregate. If there is no group by field, then
@@ -96,15 +138,25 @@ public class Aggregate extends Operator {
      * aggregate. Should return null if there are no more tuples.
      */
     protected Tuple fetchNext() throws TransactionAbortedException, DbException {
-        // some code goes here
+        if (aggIterator != null && aggIterator.hasNext()) {
+            return aggIterator.next();
+        }
         return null;
     }
 
     public void rewind() throws DbException, TransactionAbortedException {
-        // some code goes here
+        aggIterator.rewind();
     }
 
     /**
+     * 构建并返回结果元组的描述。根据是否有分组字段，元组描述会有所不同：
+     * <p>
+     * - 如果没有分组字段，仅包含一个聚合结果字段。
+     * <p>
+     * - 如果有分组字段，则包含分组字段和聚合结果字段。
+     * <p>
+     * 结果字段的名称会包括聚合操作符和聚合字段名称，例如 SUM(field_name)。
+     * <p>
      * Returns the TupleDesc of this Aggregate. If there is no group by field,
      * this will have one field - the aggregate column. If there is a group by
      * field, the first field will be the group by field, and the second will be
@@ -116,23 +168,40 @@ public class Aggregate extends Operator {
      * iterator.
      */
     public TupleDesc getTupleDesc() {
-        // some code goes here
-        return null;
+        if (td == null) {
+            // 构建结果元组描述
+            if (gfield == NO_GROUPING) {
+                td = new TupleDesc(new Type[]{Type.INT_TYPE},
+                        new String[]{String.format("%s(%s)", aop, aggregateFieldName())});
+            } else {
+                td = new TupleDesc(
+                        new Type[]{child.getTupleDesc().getFieldType(gfield), Type.INT_TYPE},
+                        new String[]{
+                                groupFieldName(),
+                                String.format("%s(%s)", aop, aggregateFieldName())
+                        });
+            }
+        }
+        return td;
     }
 
     public void close() {
-        // some code goes here
+        super.close();
+        aggIterator.close();
+        aggIterator = null;
     }
 
     @Override
     public OpIterator[] getChildren() {
-        // some code goes here
-        return null;
+        return new OpIterator[]{child};
     }
 
     @Override
     public void setChildren(OpIterator[] children) {
-        // some code goes here
+        if (children.length != 1) {
+            throw new IllegalArgumentException("Aggregate expects only one child");
+        }
+        this.child = children[0];
     }
 
 }
