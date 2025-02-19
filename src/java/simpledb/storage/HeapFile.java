@@ -98,6 +98,13 @@ public class HeapFile implements DbFile {
     public void writePage(Page page) throws IOException {
         // some code goes here
         // not necessary for lab1
+        // 以读写模式打开文件
+        RandomAccessFile file = new RandomAccessFile(this.file, "rw");
+        // 使指针偏移量指向文件末尾（单位为字节）
+        file.seek(BufferPool.getPageSize() * page.getId().getPageNumber());
+        // 向页尾写入数据
+        file.write(page.getPageData());
+        file.close();
     }
 
     /**
@@ -112,16 +119,55 @@ public class HeapFile implements DbFile {
     public List<Page> insertTuple(TransactionId tid, Tuple t)
             throws DbException, IOException, TransactionAbortedException {
         // some code goes here
-        return null;
         // not necessary for lab1
+        List<Page> result = new ArrayList<>();
+
+        // 遍历这个DbFile的pages，看有没有空的slot
+        for (int i = 0; i < this.numPages(); i++) {
+            // 通过缓冲池获取当前页，权限为读写
+            HeapPage curPage = (HeapPage) Database.getBufferPool().getPage(
+                    tid,
+                    new HeapPageId(this.getId(), i),
+                    Permissions.READ_WRITE
+            );
+            // 如果当前页有空的slot，则插入元组
+            if (curPage.getNumEmptySlots() > 0) {
+                curPage.insertTuple(t); // 在当前页插入元组
+                result.add(curPage); // 将当前页添加到结果列表
+                this.writePage(curPage); // 将当前页写回磁盘
+                return result; // 返回被修改的页面列表
+            }
+        }
+
+        // 如果所有现有页面都满了，创建一个新的HeapPage
+        HeapPage curPage = new HeapPage(
+                new HeapPageId(this.getId(), this.numPages()),
+                HeapPage.createEmptyPageData()
+        );
+        curPage.insertTuple(t); // 在新页面插入元组
+        result.add(curPage); // 将新页面添加到结果列表
+        this.writePage(curPage); // 将新页面写回磁盘
+        return result; // 返回被修改的页面列表
     }
 
     // see DbFile.java for javadocs
     public ArrayList<Page> deleteTuple(TransactionId tid, Tuple t) throws DbException,
             TransactionAbortedException {
         // some code goes here
-        return null;
         // not necessary for lab1
+        // 获取待删除元组所属的页面ID
+        PageId pageId = t.getRecordId().getPageId();
+
+        // 通过缓冲池获取该页面，权限设置为读写
+        HeapPage curPage = (HeapPage) Database.getBufferPool().getPage(tid, pageId, Permissions.READ_WRITE);
+
+        // 在当前页面中删除指定的元组
+        curPage.deleteTuple(t);
+
+        // 返回被修改的页面
+        ArrayList<Page> result = new ArrayList<>();
+        result.add(curPage);
+        return result;
     }
 
     // see DbFile.java for javadocs
@@ -182,17 +228,21 @@ public class HeapFile implements DbFile {
             }
 
             private void loadNextPage() throws DbException, TransactionAbortedException {
-                if (currentPageIndex >= numPages()) {
-                    currentTupleIterator = null;
-                    return;
-                }
+                currentTupleIterator = null;
+                while (currentPageIndex < numPages()) {
+                    HeapPageId pid = new HeapPageId(getId(), currentPageIndex);
+                    currentPage = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_ONLY);
+                    currentTupleIterator = currentPage.iterator();
+                    currentPageIndex++; // 先递增页面索引
 
-                // 使用 BufferPool 获取下一页面
-                HeapPageId pid = new HeapPageId(getId(), currentPageIndex);
-                currentPage = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_ONLY);
-                currentTupleIterator = currentPage.iterator();
-                currentPageIndex++;
+                    // 只有找到有数据的页面才停止循环
+                    if (currentTupleIterator.hasNext()) {
+                        break;
+                    }
+                    currentTupleIterator = null;
+                }
             }
+
         };
     }
 

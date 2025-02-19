@@ -9,6 +9,7 @@ import simpledb.transaction.TransactionId;
 
 import java.io.*;
 
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -37,7 +38,7 @@ public class BufferPool {
 
     private final int numPages; // BufferPool 中可缓存的最大页面数
 
-    private final ConcurrentHashMap<Integer, Page> pageStore; // 存储缓存的页面
+    private final ConcurrentHashMap<PageId, Page> pageStore; // 存储缓存的页面
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -83,14 +84,14 @@ public class BufferPool {
         throws TransactionAbortedException, DbException {
         // some code goes here
         // 如果缓存中没有该页面
-        if (!pageStore.containsKey(pid.hashCode())) {
+        if (!pageStore.containsKey(pid)) {
             // 从磁盘文件中获取
             DbFile dbfile = Database.getCatalog().getDatabaseFile(pid.getTableId());
             Page page = dbfile.readPage(pid);
             // 缓存到内存中
-            pageStore.put(pid.hashCode(), page);
+            pageStore.put(pid, page);
         }
-        return pageStore.get(pid.hashCode());
+        return pageStore.get(pid);
     }
 
     /**
@@ -155,6 +156,12 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
+        DbFile dbFile = Database.getCatalog().getDatabaseFile(tableId);
+        List<Page> curPage = dbFile.insertTuple(tid, t);
+        for (Page page : curPage) {
+            page.markDirty(true, tid);
+            pageStore.put(page.getId(), page);
+        }
     }
 
     /**
@@ -174,6 +181,13 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
+        int tableId = t.getRecordId().getPageId().getTableId();
+        DbFile dbFile = Database.getCatalog().getDatabaseFile(tableId);
+        List<Page> curPage = dbFile.deleteTuple(tid, t);
+        for (Page page : curPage) {
+            page.markDirty(true, tid);
+            pageStore.put(page.getId(), page);
+        }
     }
 
     /**
