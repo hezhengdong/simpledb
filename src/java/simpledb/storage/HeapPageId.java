@@ -69,7 +69,8 @@ public class HeapPageId implements PageId {
     public boolean equals(Object o) {
         // some code goes here
         // 原理见 https://liaoxuefeng.com/books/java/collection/equals/index.html
-        if (o instanceof PageId pi) {
+        if (o instanceof PageId) {
+            PageId pi = (PageId) o;
             return Objects.equals(this.tableId, pi.getTableId()) && Objects.equals(this.pgNo, pi.getPageNumber());
         }
         return false;
