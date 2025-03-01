@@ -25,14 +25,14 @@ import java.io.File;
  * best implementations for joins.
  */
 public class LogicalPlan {
-    private List<LogicalJoinNode> joins;
-    private final List<LogicalScanNode> tables;
-    private final List<LogicalFilterNode> filters;
-    private final Map<String, OpIterator> subplanMap;
-    private final Map<String,Integer> tableMap;
+    private List<LogicalJoinNode> joins; // 表示两个表之间的连接
+    private final List<LogicalScanNode> tables; // 表示一个表的扫描操作
+    private final List<LogicalFilterNode> filters; // 表示一个过滤操作
+    private final Map<String, OpIterator> subplanMap; // 存储子计划的映射。键是表的别名，值是对应的`OpIterator`。
+    private final Map<String,Integer> tableMap; // 存储表别名到表 ID 的映射
 
-    private final List<LogicalSelectListNode> selectList;
-    private String groupByField = null;
+    private final List<LogicalSelectListNode> selectList; // 表示一个选择字段
+    private String groupByField = null; // 存储分组字段的名称
     private boolean hasAgg = false;
     private String aggOp;
     private String aggField;
@@ -288,30 +288,37 @@ public class LogicalPlan {
      *  @return A OpIterator representing this plan.
      */ 
     public OpIterator physicalPlan(TransactionId t, Map<String,TableStats> baseTableStats, boolean explain) throws ParsingException {
-        Iterator<LogicalScanNode> tableIt = tables.iterator();
-        Map<String,String> equivMap = new HashMap<>();
-        Map<String,Double> filterSelectivities = new HashMap<>();
-        Map<String,TableStats> statsMap = new HashMap<>();
+        // 1. 初始化必要数据结构
+        Iterator<LogicalScanNode> tableIt = tables.iterator(); // 获取表的迭代器
+        Map<String,String> equivMap = new HashMap<>(); // 记录表的别名映射
+        Map<String,Double> filterSelectivities = new HashMap<>(); // 记录每个表的选择性
+        Map<String,TableStats> statsMap = new HashMap<>(); // 记录每个表的统计信息
 
+        // 2. 遍历所有的 LogicalScanNode，为每个表创建 SeqScan 操作，并将其存储进 subplanMap
         while (tableIt.hasNext()) {
-            LogicalScanNode table = tableIt.next();
+            LogicalScanNode table = tableIt.next(); // 获取当前表的扫描节点
             SeqScan ss = null;
             try {
+                 // 创建 SeqScan 操作符对象，进行表扫描
                  ss = new SeqScan(t, Database.getCatalog().getDatabaseFile(table.t).getId(), table.alias);
             } catch (NoSuchElementException e) {
                 throw new ParsingException("Unknown table " + table.t);
             }
             
             subplanMap.put(table.alias,ss);
+            // 获取表的统计信息
             String baseTableName = Database.getCatalog().getTableName(table.t);
             statsMap.put(baseTableName, baseTableStats.get(baseTableName));
-            filterSelectivities.put(table.alias, 1.0);
+            filterSelectivities.put(table.alias, 1.0); // 初始选择性为 1.0，表示没有过滤
 
         }
 
+        // 3. 遍历所有 LogicalFilterNode，为每个过滤条件创建 Filter 操作，更新 subplanMap。
         for (LogicalFilterNode lf : filters) {
+            // 获取该表的 SeqScan 操作符
             OpIterator subplan = subplanMap.get(lf.tableAlias);
             if (subplan == null) {
+                // 如果没有找到该表的操作符，抛出异常
                 throw new ParsingException("Unknown table in WHERE clause " + lf.tableAlias);
             }
 
@@ -319,11 +326,15 @@ public class LogicalPlan {
             Type ftyp;
             TupleDesc td = subplanMap.get(lf.tableAlias).getTupleDesc();
 
-            try {//td.fieldNameToIndex(disambiguateName(lf.fieldPureName))
+            try {
+                //td.fieldNameToIndex(disambiguateName(lf.fieldPureName))
+                // 获取字段类型
                 ftyp = td.getFieldType(td.fieldNameToIndex(lf.fieldQuantifiedName));
             } catch (NoSuchElementException e) {
                 throw new ParsingException("Unknown field in filter expression " + lf.fieldQuantifiedName);
             }
+
+            // 根据字段类型，创建对应的字段值
             if (ftyp == Type.INT_TYPE)
                 f = new IntField(new Integer(lf.c));
             else
@@ -335,20 +346,26 @@ public class LogicalPlan {
             } catch (NoSuchElementException e) {
                 throw new ParsingException("Unknown field " + lf.fieldQuantifiedName);
             }
+            // 相当于是把 SeqScan 当作 Filter 的孩子节点传递了进去，然后将 SeqScan 更新为 Filter（内部封装了之前的 SeqScan）
             subplanMap.put(lf.tableAlias, new Filter(p, subplan));
 
+            // 获取当前表的统计信息
             TableStats s = statsMap.get(Database.getCatalog().getTableName(this.getTableId(lf.tableAlias)));
 
+            // 计算过滤的谓词选择性
             double sel = s.estimateSelectivity(subplan.getTupleDesc().fieldNameToIndex(lf.fieldQuantifiedName), lf.p, f);
             filterSelectivities.put(lf.tableAlias, filterSelectivities.get(lf.tableAlias) * sel);
 
+            // 这里可以添加选择性因子的估算（注释掉的代码）
             //s.addSelectivityFactor(estimateFilterSelectivity(lf,statsMap));
         }
-        
+
+        // 4. 连接优化，调用 JoinOptimizer 的 orderJoins 方法
         JoinOptimizer jo = new JoinOptimizer(this,joins);
 
         joins = jo.orderJoins(statsMap,filterSelectivities,explain);
 
+        // 5. 遍历所有 LogicalJoinNode，为每个过滤条件创建 Join 操作，更新 subplanMap。
         for (LogicalJoinNode lj : joins) {
             OpIterator plan1;
             OpIterator plan2;
@@ -404,10 +421,13 @@ public class LogicalPlan {
         if (subplanMap.size() > 1) {
             throw new ParsingException("Query does not include join expressions joining all nodes!");
         }
-        
+
         OpIterator node = subplanMap.entrySet().iterator().next().getValue();
 
+        // 6. 遍历所有 LogicalSelectListNode，以创建 outField 与 outTypes。
         //walk the select list, to determine order in which to project output fields
+        // 选择操作，确定输出字段的最终顺序。
+        // outField 与 outTypes 用于存储实际输出字段的索引和类型，并用于最终创建 Project 节点。
         List<Integer> outFields = new ArrayList<>();
         List<Type> outTypes = new ArrayList<>();
         for (int i = 0; i < selectList.size(); i++) {
@@ -457,6 +477,7 @@ public class LogicalPlan {
                 }
         }
 
+        // 7. 如果存在聚合操作，创建 Aggregate 节点
         if (hasAgg) {
             TupleDesc td = node.getTupleDesc();
             Aggregate aggNode;
@@ -471,10 +492,16 @@ public class LogicalPlan {
             node = aggNode;
         }
 
+        // 8. 如果存在排序操作，创建 OrderBy 节点
         if (hasOrderBy) {
             node = new OrderBy(node.getTupleDesc().fieldNameToIndex(oByField), oByAsc, node);
         }
 
+        /**
+         * 7. 最终返回 Project 节点。
+         * - 其中 node 通过火山模型，对算子层层封装，处理了 SeqScan、Filter、Join、Aggregate、OrderBy。
+         * - 最后处理 SELECT，通过 outFields、outTypes，确定实际输出的字段。
+         */
         return new Project(outFields, outTypes, node);
     }
 

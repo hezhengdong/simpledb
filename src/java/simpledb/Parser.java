@@ -137,34 +137,45 @@ public class Parser {
 
     }
 
+    /**
+     * 3. 将 ZQuery 对象解析为 LogicalPlan
+     * @param tid
+     * @param q
+     * @return
+     * @throws IOException
+     * @throws Zql.ParseException
+     * @throws simpledb.ParsingException
+     */
     public LogicalPlan parseQueryLogicalPlan(TransactionId tid, ZQuery q)
             throws IOException, Zql.ParseException, simpledb.ParsingException {
+        // 1. 获取 ZQuery 中的 FROM 子句，列出所有参与查询的表
         @SuppressWarnings("unchecked")
         List<ZFromItem> from = q.getFrom();
+
+        // 2. 创建一个新的 LogicalPlan 对象，用于存储查询的逻辑执行计划
         LogicalPlan lp = new LogicalPlan();
+
+        // 3. 将原始查询字符串设置到逻辑计划中（用于调试和日志）
         lp.setQuery(q.toString());
         // walk through tables in the FROM clause
+        // 4. 遍历 FROM 子句中的表项，获取每个表的元数据并将其添加到 LogicalPlan 中
         for (int i = 0; i < from.size(); i++) {
             ZFromItem fromIt = from.get(i);
             try {
-
+                // 4.1 根据表名获取表的 ID（如果表不存在，则抛出异常）
                 int id = Database.getCatalog().getTableId(fromIt.getTable()); // will
-                                                                              // fall
-                                                                              // through
-                                                                              // if
-                                                                              // table
-                                                                              // doesn't
-                                                                              // exist
                 String name;
 
+                // 4.2 如果有别名，则使用别名，否则使用表名
                 if (fromIt.getAlias() != null)
                     name = fromIt.getAlias();
                 else
                     name = fromIt.getTable();
 
+                // 4.3 将表的扫描操作添加到逻辑计划中
                 lp.addScan(id, name);
 
-                // XXX handle subquery?
+                // XXX handle subquery? 目前未处理子查询的情况
             } catch (NoSuchElementException e) {
                 e.printStackTrace();
                 throw new simpledb.ParsingException("Table "
@@ -172,6 +183,7 @@ public class Parser {
             }
         }
 
+        // 5. 解析 WHERE 子句，如果存在，则处理其中的过滤条件
         // now parse the where clause, creating Filter and Join nodes as needed
         ZExp w = q.getWhere();
         if (w != null) {
@@ -181,10 +193,12 @@ public class Parser {
                         "Nested queries are currently unsupported.");
             }
             ZExpression wx = (ZExpression) w;
+            // 处理 WHERE 子句中的过滤条件
             processExpression(tid, wx, lp);
 
         }
 
+        // 6. 解析 GROUP BY 子句，处理分组字段
         // now look for group by fields
         ZGroupBy gby = q.getGroupBy();
         String groupByField = null;
@@ -208,6 +222,7 @@ public class Parser {
 
         }
 
+        // 7. 解析 SELECT 子句，处理字段选择以及聚合函数
         // walk the select list, pick out aggregates, and check for query
         // validity
         @SuppressWarnings("unchecked")
@@ -217,11 +232,13 @@ public class Parser {
 
         for (int i = 0; i < selectList.size(); i++) {
             ZSelectItem si = selectList.get(i);
+            // 如果是表达式且不是常量，则抛出异常
             if (si.getAggregate() == null
                     && (si.isExpression() && !(si.getExpression() instanceof ZConstant))) {
                 throw new simpledb.ParsingException(
                         "Expressions in SELECT list are not supported.");
             }
+            // 如果是聚合函数，处理聚合字段和函数
             if (si.getAggregate() != null) {
                 if (aggField != null) {
                     throw new simpledb.ParsingException(
@@ -234,6 +251,7 @@ public class Parser {
                         + ", agg fun is : " + aggFun);
                 lp.addProjectField(aggField, aggFun);
             } else {
+                // 如果有 GROUP BY，验证 SELECT 字段是否包含在 GROUP BY 中
                 if (groupByField != null
                         && !(groupByField.equals(si.getTable() + "."
                                 + si.getColumn()) || groupByField.equals(si
@@ -246,15 +264,18 @@ public class Parser {
             }
         }
 
+        // 如果有 GROUP BY 字段但没有聚合函数，则抛出异常
         if (groupByField != null && aggFun == null) {
             throw new simpledb.ParsingException("GROUP BY without aggregation.");
         }
 
+        // 如果有聚合函数，则将聚合函数、聚合字段和分组字段添加到逻辑计划中
         if (aggFun != null) {
             lp.addAggregate(aggFun, aggField, groupByField);
         }
         // sort the data
 
+        // 解析 ORDER BY 子句，处理排序字段
         if (q.getOrderBy() != null) {
             @SuppressWarnings("unchecked")
             List<ZOrderBy> obys = q.getOrderBy();
@@ -268,10 +289,11 @@ public class Parser {
                         "Complex ORDER BY's are not supported");
             }
             ZConstant f = (ZConstant) oby.getExpression();
-
+            // 将排序字段和升序/降序信息添加到逻辑计划中
             lp.addOrderBy(f.getValue(), oby.getAscOrder());
 
         }
+        // 返回构建好的逻辑执行计划
         return lp;
     }
 
@@ -289,6 +311,7 @@ public class Parser {
         query.setPhysicalPlan(physicalPlan);
         query.setLogicalPlan(lp);
 
+        // 提供查询计划的可视化展示（对自己而言暂时不重要，细节代码也都是 Lab 自己提供的。）
         if (physicalPlan != null) {
             Class<?> c;
             try {
@@ -493,8 +516,17 @@ public class Parser {
         processNextStatement(new ByteArrayInputStream(s.getBytes(StandardCharsets.UTF_8)));
     }
 
+    /**
+     * 2.
+     * 接收输入流，使用 ZqlParser 解析每一条 SQL 语句。
+     * 每个 SQL 语句会被解析成一个 ZStatement 对象。
+     * 读取 SQL 语句并将其传递给相应的处理方法（如 handleQueryStatement, handleInsertStatement 等）。
+     *
+     * @param is
+     */
     public void processNextStatement(InputStream is) {
         try {
+            // 使用 Zql 库解析 SQL 字符串，生成 Zql 对象
             ZqlParser p = new ZqlParser(is);
             ZStatement s = p.readStatement();
 
@@ -509,6 +541,10 @@ public class Parser {
                             + curtrans.getId().getId());
                 }
                 try {
+                    // 解析 SQL 语句后，根据 SQL 类型的不同，调用不同的处理方法。
+                    // SQL 类型分为增删查。
+                    // 每个处理方法进一步解析 SQL 语句，生成 LogicalPlan。
+                    // 然后将其转化为物理执行计划，并执行相应操作。
                     if (s instanceof ZInsert)
                         query = handleInsertStatement((ZInsert) s,
                                 curtrans.getId());
@@ -590,6 +626,12 @@ public class Parser {
 
     protected boolean interactive = true;
 
+    /**
+     * 1. 启动解析器，加载数据库模式，根据命令行参数决定是交互模式还是从文件读取SQL。
+     *
+     * @param argv
+     * @throws IOException
+     */
     protected void start(String[] argv) throws IOException {
         // first add tables to database
         Database.getCatalog().loadSchema(argv[0]);
@@ -597,6 +639,7 @@ public class Parser {
 
         String queryFile = null;
 
+        // 解析参数
         if (argv.length > 1) {
             for (int i = 1; i < argv.length; i++) {
                 if (argv[i].equals("-explain")) {
@@ -617,6 +660,7 @@ public class Parser {
                 }
             }
         }
+        // 如果不是交互模式，从文件读取并执行SQL。
         if (!interactive) {
             try {
                 // curtrans = new Transaction();
@@ -639,7 +683,9 @@ public class Parser {
                 System.out.println("Unable to find query file" + queryFile);
                 e.printStackTrace();
             }
-        } else { // no query file, run interactive prompt
+        }
+        // 如果是交互模式，启动命令行界面。
+        else { // no query file, run interactive prompt
             ConsoleReader reader = new ConsoleReader();
 
             // Add really stupid tab completion for simple SQL
@@ -669,6 +715,7 @@ public class Parser {
                     }
 
                     long startTime = System.currentTimeMillis();
+                    // 关键：解析 SQL 查询字符串
                     processNextStatement(new ByteArrayInputStream(
                             statementBytes));
                     long time = System.currentTimeMillis() - startTime;
