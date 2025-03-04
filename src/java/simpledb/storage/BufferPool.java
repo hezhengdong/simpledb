@@ -99,10 +99,17 @@ public class BufferPool {
             lockType = Permissions.READ_WRITE.ordinal();
         }
 
+        // 设置超时时间（1秒）
+        long timeout = 1000;
+        long startTime = System.currentTimeMillis();
         // 尝试为页面设置锁
-        if (!lockManager.setLock(pid, tid, lockType)) {
-            // 如果设置失败，抛出异常
-            throw new TransactionAbortedException();
+        while (!lockManager.setLock(pid, tid, lockType)) {
+            // 检查是否超过了超时时间
+            long elapsedTime = System.currentTimeMillis() - startTime;
+            if (elapsedTime > timeout) {
+                // 如果超过超时时间，抛出异常
+                throw new TransactionAbortedException();
+            }
         }
 
         // 如果页面存在
