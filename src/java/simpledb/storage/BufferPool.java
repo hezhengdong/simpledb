@@ -3,7 +3,7 @@ package simpledb.storage;
 import simpledb.common.Database;
 import simpledb.common.Permissions;
 import simpledb.common.DbException;
-import simpledb.common.DeadlockException;
+import simpledb.transaction.LockManager;
 import simpledb.transaction.TransactionAbortedException;
 import simpledb.transaction.TransactionId;
 
@@ -13,7 +13,6 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.LinkedHashMap;
 import java.util.Iterator;
-import java.util.Map;
 
 /**
  * BufferPool 负责管理从磁盘向内存读写页面。
@@ -45,6 +44,8 @@ public class BufferPool {
     private final ConcurrentHashMap<PageId, Page> pageStore = new ConcurrentHashMap<>();
     // 存储页面的访问顺序，键为 PageId，值无实际意义
     private final LinkedHashMap<PageId, Boolean> lruCache = new LinkedHashMap<>(16, 0.75f, true);
+
+    private LockManager lockManager = new LockManager();
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -89,32 +90,45 @@ public class BufferPool {
      */
     public Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
-        synchronized (lruCache) {
-            // 如果页面存在
-            if (lruCache.containsKey(pid)) {
-                // 更新 LRU 缓存
-                lruCache.get(pid);
-                return pageStore.get(pid);
-            }
 
-            // 如果页面已满，进行页面淘汰
-            if (pageStore.size() >= numPages) {
-                evictPage();
-            }
-
-            // 如果页面不存在
-
-            // 获取数据库文件并读取新页面
-            DbFile dbFile = Database.getCatalog().getDatabaseFile(pid.getTableId());
-            Page page = dbFile.readPage(pid);
-
-            // 更新缓存
-            pageStore.put(pid, page);
-            // 新增 LRU 缓存
-            lruCache.put(pid, true);
-
-            return page;
+        // 获取锁权限
+        int lockType;
+        if (perm == Permissions.READ_ONLY) {
+            lockType = Permissions.READ_ONLY.ordinal();
+        } else {
+            lockType = Permissions.READ_WRITE.ordinal();
         }
+
+        // 尝试为页面设置锁
+        if (!lockManager.setLock(pid, tid, lockType)) {
+            // 如果设置失败，抛出异常
+            throw new TransactionAbortedException();
+        }
+
+        // 如果页面存在
+        if (lruCache.containsKey(pid)) {
+            // 更新 LRU 缓存
+            lruCache.get(pid);
+            return pageStore.get(pid);
+        }
+
+        // 如果缓冲池已满，进行页面淘汰
+        if (pageStore.size() >= numPages) {
+            evictPage();
+        }
+
+        // 如果页面不存在
+
+        // 获取数据库文件并读取新页面
+        DbFile dbFile = Database.getCatalog().getDatabaseFile(pid.getTableId());
+        Page page = dbFile.readPage(pid);
+
+        // 更新缓存
+        pageStore.put(pid, page);
+        // 新增 LRU 缓存
+        lruCache.put(pid, true);
+
+        return page;
     }
 
     /**
@@ -129,9 +143,11 @@ public class BufferPool {
     public  void unsafeReleasePage(TransactionId tid, PageId pid) {
         // some code goes here
         // not necessary for lab1|lab2
+        lockManager.releaseLock(pid, tid);
     }
 
     /**
+     * 释放与特定事务相关的所有锁。<br>
      * Release all locks associated with a given transaction.
      *
      * @param tid the ID of the transaction requesting the unlock
@@ -139,16 +155,21 @@ public class BufferPool {
     public void transactionComplete(TransactionId tid) {
         // some code goes here
         // not necessary for lab1|lab2
-    }
-
-    /** Return true if the specified transaction has a lock on the specified page */
-    public boolean holdsLock(TransactionId tid, PageId p) {
-        // some code goes here
-        // not necessary for lab1|lab2
-        return false;
+        transactionComplete(tid, true);
     }
 
     /**
+     * 判断给定事务是否持有指定页面的锁。<br>
+     * Return true if the specified transaction has a lock on the specified page */
+    public boolean holdsLock(TransactionId tid, PageId p) {
+        // some code goes here
+        // not necessary for lab1|lab2
+        return lockManager.holdsLock(p, tid);
+    }
+
+    /**
+     * 提交或中止某个事务；<br>
+     * 释放与该事务相关的所有锁。<br>
      * Commit or abort a given transaction; release all locks associated to
      * the transaction.
      *
