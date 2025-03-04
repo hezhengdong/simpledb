@@ -100,6 +100,19 @@ public class LockManager {
     }
 
     /**
+     * 移除事务中的所有锁。
+     *
+     * @param tid
+     */
+    public void releaseLocks(TransactionId tid) {
+        // 遍历锁映射表，检查每个页面的锁
+        for (PageId pageId : lockMap.keySet()) {
+            // 调用 releaseLock 方法释放事务在该页面上的锁
+            releaseLock(pageId, tid);
+        }
+    }
+
+    /**
      * 判断给定事务是否持有指定页面的锁。
      *
      * @param pageId

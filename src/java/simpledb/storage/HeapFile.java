@@ -134,7 +134,6 @@ public class HeapFile implements DbFile {
             if (curPage.getNumEmptySlots() > 0) {
                 curPage.insertTuple(t); // 在当前页插入元组
                 result.add(curPage); // 将当前页添加到结果列表
-                this.writePage(curPage); // 将当前页写回磁盘
                 return result; // 返回被修改的页面列表
             }
         }
@@ -146,7 +145,7 @@ public class HeapFile implements DbFile {
         );
         curPage.insertTuple(t); // 在新页面插入元组
         result.add(curPage); // 将新页面添加到结果列表
-        this.writePage(curPage); // 将新页面写回磁盘
+        writePage(curPage); // 将新页面写回磁盘
         return result; // 返回被修改的页面列表
     }
 

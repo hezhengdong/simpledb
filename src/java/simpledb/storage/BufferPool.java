@@ -173,12 +173,38 @@ public class BufferPool {
      * Commit or abort a given transaction; release all locks associated to
      * the transaction.
      *
-     * @param tid the ID of the transaction requesting the unlock
-     * @param commit a flag indicating whether we should commit or abort
+     * @param tid the ID of the transaction requesting the unlock<br>
+     *            请求解锁的事务 ID
+     * @param commit a flag indicating whether we should commit or abort<br>
+     *               一个标志，用于指示事务是要 commit（提交） 还是 abort（回滚）。
      */
     public void transactionComplete(TransactionId tid, boolean commit) {
         // some code goes here
         // not necessary for lab1|lab2
+        if (commit) {
+            try {
+                flushPages(tid);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        } else {
+            restorePages(tid);
+        }
+        lockManager.releaseLocks(tid);
+    }
+
+    private synchronized void restorePages(TransactionId tid) {
+        for (PageId pid : pageStore.keySet()) {
+            Page page = pageStore.get(pid);
+            lruCache.get(pid);
+            // 检查页面是否是脏页，并且是由当前事务修改的
+            if (page.isDirty() != null && page.isDirty().equals(tid)) {
+                // 恢复页面到修改前的状态
+                Page oldPage = page.getBeforeImage();
+                pageStore.put(pid, oldPage); // 更新缓存中的页面
+                page.markDirty(false, null); // 清除脏页标记
+            }
+        }
     }
 
     /**
@@ -235,6 +261,7 @@ public class BufferPool {
     }
 
     /**
+     * 刷新所有脏页到磁盘上。<br>
      * Flush all dirty pages to disk.
      * NB: Be careful using this routine -- it writes dirty data to disk so will
      *     break simpledb if running in NO STEAL mode.
@@ -281,6 +308,7 @@ public class BufferPool {
     }
 
     /**
+     * 刷新指定页到磁盘上。<br>
      * Flushes a certain page to disk
      * @param pid an ID indicating the page to flush
      */
@@ -301,16 +329,24 @@ public class BufferPool {
             dbFile.writePage(page);
             // 事务中会用到，作用：保存当前页面状态作为前镜像，以便在事务回滚时，恢复到刷盘前的状态
             page.setBeforeImage();
-            // 清除脏页标记
+            // 清除脏页标记，脏页变为了缓冲池中的正常页
             page.markDirty(false, null);
         }
     }
 
-    /** Write all pages of the specified transaction to disk.
+    /**
+     * 刷新指定事务的页到磁盘上。（相当于刷新事务中的脏页到磁盘上。）<br>
+     * Write all pages of the specified transaction to disk.
      */
     public synchronized  void flushPages(TransactionId tid) throws IOException {
         // some code goes here
         // not necessary for lab1|lab2
+        for (PageId pid : pageStore.keySet()) {
+            Page page = pageStore.get(pid);
+            if (page.isDirty() != null && page.isDirty().equals(tid)) {
+                flushPage(pid);
+            }
+        }
     }
 
     /**
@@ -322,36 +358,40 @@ public class BufferPool {
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
     private synchronized void evictPage() throws DbException {
-        PageId lruPid = null;
+        PageId removePid = null;
 
         // 遍历 LRU 缓存，找到最久未使用的页面
-        synchronized (lruCache) {
-            Iterator<PageId> iterator = lruCache.keySet().iterator();
-            while (iterator.hasNext()) {
-                PageId pid = iterator.next();
-                Page page = pageStore.get(pid);
-                // 如果页面未修改，不是脏页，则可以淘汰
-                if (page.isDirty() == null) {
-                    lruPid = pid;
-                    iterator.remove(); // 从LRU缓存中移除该页面
-                    break;
-                }
+        for (PageId pid : lruCache.keySet()) {
+            Page page = pageStore.get(pid);
+            // 如果页面未修改，不是脏页，则可以淘汰
+            if (page.isDirty() == null) {
+                removePid = pid;
+                break;
             }
         }
 
-        // 如果没有找到可以淘汰的页面，则抛出异常
-        if (lruPid == null) {
-            throw new DbException("No non-dirty pages to evict");
+        // 如果找到了可以淘汰的、非脏页的页面，则移除。
+        if (removePid != null) {
+            lruCache.remove(removePid);
+            pageStore.remove(removePid);
         }
-
-        // 刷新页面并移除该页面
-        try {
-            flushPage(lruPid); // 将页面刷新到磁盘（这里主要是刷新脏页，非脏页已被淘汰）
-        } catch (IOException e) {
-            throw new DbException("Evict page failed");
+        // 如果没有找到可以淘汰的页面，说明缓冲池中剩下的都是脏页，开始淘汰脏页。
+        else {
+            // 获取脏页 ID，即 lruCache 的第一个元素
+            for (PageId pid : lruCache.keySet()) {
+                removePid = pid;
+                break;
+            }
+            // 刷新脏页到磁盘上
+            try {
+                flushPage(removePid);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+            // 从缓冲池和 LRU 中移除脏页
+            lruCache.remove(removePid);
+            pageStore.remove(removePid);
         }
-        // 从页面存储中移除该页面
-        pageStore.remove(lruPid);
     }
 
 }
