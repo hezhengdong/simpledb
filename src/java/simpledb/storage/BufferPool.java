@@ -238,6 +238,7 @@ public class BufferPool {
         for (Page page : curPage) {
             page.markDirty(true, tid);
             pageStore.put(page.getId(), page);
+            lruCache.put(page.getId(), true);
         }
     }
 
@@ -264,6 +265,7 @@ public class BufferPool {
         for (Page page : curPage) {
             page.markDirty(true, tid);
             pageStore.put(page.getId(), page);
+            lruCache.put(page.getId(), true);
         }
     }
 
