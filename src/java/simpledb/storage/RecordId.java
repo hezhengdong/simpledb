@@ -54,12 +54,8 @@ public class RecordId implements Serializable {
      */
     @Override
     public boolean equals(Object o) {
-        // some code goes here
-        RecordId recordId = null;
-        if (!(o instanceof RecordId)) {
-            recordId = (RecordId) o;
-            return false;
-        }
+        if (!(o instanceof RecordId)) return false;
+        RecordId recordId = (RecordId) o;
         return tupleno == recordId.tupleno && Objects.equals(pid, recordId.pid);
     }
 
