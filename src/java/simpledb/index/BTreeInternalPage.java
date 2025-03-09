@@ -24,12 +24,19 @@ import simpledb.storage.RecordId;
  */
 public class BTreeInternalPage extends BTreePage {
 	private final byte[] header;
-	private final Field[] keys;
-	private final int[] children;
-	private final int numSlots;
+	private final Field[] keys; // 存储当前内部页中 BTreeEntry 条目的键
+	private final int[] children; // 存储当前内部页的子页面 ID
+	private final int numSlots; // 当前页面最多可以存储多少个 BTreeEntry 条目
 	
-	private int childCategory; // either leaf or internal
+	private int childCategory; // 当前页面的子节点类型，either leaf or internal
 
+	/**
+	 * 检查页当前页面的正确性。例如所有键按升序排序。
+	 * @param lowerBound
+	 * @param upperBound
+	 * @param checkOccupancy
+	 * @param depth
+	 */
 	public void checkRep(Field lowerBound, Field upperBound, boolean checkOccupancy, int depth) {
 		Field prev = lowerBound;
 		assert(this.getId().pgcateg() == BTreePageId.INTERNAL);
@@ -116,7 +123,8 @@ public class BTreeInternalPage extends BTreePage {
 		setBeforeImage();
 	}
 
-	/** 
+	/**
+	 * 计算当前内部页面最大可容纳的 BTreeEntry 条目数。<br>
 	 * Retrieve the maximum number of entries this page can hold. (The number of keys)
  	 */
 	public int getMaxEntries() {        
@@ -129,6 +137,7 @@ public class BTreeInternalPage extends BTreePage {
 	}
 
 	/**
+	 * 计算页头 header 的大小。<br>
 	 * Computes the number of bytes in the header of a B+ internal page with each entry occupying entrySize bytes
 	 * @return the number of bytes in the header
 	 */
@@ -166,6 +175,7 @@ public class BTreeInternalPage extends BTreePage {
 	}
 
 	/**
+	 * 从源文件中读取下一个 key。<br>
 	 * Read keys from the source file.
 	 */
 	private Field readNextKey(DataInputStream dis, int slotId) throws NoSuchElementException {
@@ -195,6 +205,7 @@ public class BTreeInternalPage extends BTreePage {
 	}
 
 	/**
+	 * 从源文件中读取下一个子页面的 ID。<br>
 	 * Read child pointers from the source file.
 	 */
 	private int readNextChild(DataInputStream dis, int slotId) throws NoSuchElementException {
@@ -438,40 +449,55 @@ public class BTreeInternalPage extends BTreePage {
 	}
 
 	/**
+	 * 将指定的 BTreeEntry 插入到当前页面中，并更新该条目的 recordId 以反映它现在存储在本页面上。<br>
 	 * Adds the specified entry to the page; the entry's recordId should be updated to 
 	 * reflect that it is now stored on this page.
 	 * @throws DbException if the page is full (no empty slots) or key field type,
-	 *         table id, or child page category is a mismatch, or the entry is invalid
+	 *         table id, or child page category is a mismatch, or the entry is invalid<br>
+	 *         如果页面已满、关键字段类型不匹配、表ID不匹配，或者子页面类别不一致，则抛出 DbException。
 	 * @param e The entry to add.
 	 */
 	public void insertEntry(BTreeEntry e) throws DbException {
+		// 检查插入条目的关键字段类型是否与本页面的 TupleDesc 中指定的 keyField 类型一致
 		if (!e.getKey().getType().equals(td.getFieldType(keyField)))
 			throw new DbException("key field type mismatch, in insertEntry");
 
+		// 检查条目中左右子页面的 tableId 是否与当前页面的 tableId 一致
 		if(e.getLeftChild().getTableId() != pid.getTableId() || e.getRightChild().getTableId() != pid.getTableId())
 			throw new DbException("table id mismatch in insertEntry");
 
+		// 如果当前页面还没有设置子页面类别（childCategory 为 0），则进行初始化
 		if(childCategory == 0) {
+			// 首先要求左右子页面的类别必须一致，否则抛出异常
 			if(e.getLeftChild().pgcateg() != e.getRightChild().pgcateg())
 				throw new DbException("child page category mismatch in insertEntry");
-
+			// 将子页面类别设为左子页面的类别
 			childCategory = e.getLeftChild().pgcateg();
 		}
+		// 如果已经设置了子页面类别，则要求条目的左右子页面类别必须与之匹配
 		else if(e.getLeftChild().pgcateg() != childCategory || e.getRightChild().pgcateg() != childCategory)
 			throw new DbException("child page category mismatch in insertEntry");
 
 		// if this is the first entry, add it and return
+		// 如果页面为空（即所有槽均为空，getNumEmptySlots() 等于最大条目数），则说明这是第一个条目
 		if(getNumEmptySlots() == getMaxEntries()) {
+			// 将第一个槽（索引 0）的孩子设置为条目的左子页面
 			children[0] = e.getLeftChild().getPageNumber();
+			// 将第二个槽（索引 1）的孩子设置为条目的右子页面
 			children[1] = e.getRightChild().getPageNumber();
+			// 将索引 1 的键设置为条目的关键字
 			keys[1] = e.getKey();
+			// 标记槽 0 和槽 1 为已使用
 			markSlotUsed(0, true);
 			markSlotUsed(1, true);
+			// 更新条目的 RecordId 为当前页面和槽 1
 			e.setRecordId(new RecordId(pid, 1));
+			// 插入完成，直接返回
 			return;
 		}
 
 		// find the first empty slot, starting from 1
+		// 找到第一个空槽（从索引 1 开始，因为槽 0 已经被使用）
 		int emptySlot = -1;
 		for (int i=1; i<numSlots; i++) {
 			if (!isSlotUsed(i)) {
@@ -480,44 +506,54 @@ public class BTreeInternalPage extends BTreePage {
 			}
 		}
 
+		// 如果没有找到空槽，则说明页面已满，抛出异常
 		if (emptySlot == -1)
 			throw new DbException("called insertEntry on page with no empty slots.");        
 
 		// find the child pointer matching the left or right child in this entry
+		// 寻找一个与条目中左子或右子页面匹配的孩子指针所在槽，
+		// 这个槽（lessOrEqKey）表示在该槽处插入条目可以保持顺序
 		int lessOrEqKey = -1;
-		for (int i=0; i<numSlots; i++) {
-			if(isSlotUsed(i)) {
+		for (int i = 0; i < numSlots; i++) {
+			if (isSlotUsed(i)) {
+				// 如果当前槽中的孩子页面与条目的左子或右子页面匹配
 				if(children[i] == e.getLeftChild().getPageNumber() || children[i] == e.getRightChild().getPageNumber()) {
+					// 如果不是第一个槽，并且当前槽的键大于要插入的键，则违反了排序规则，抛出异常
 					if(i > 0 && keys[i].compare(Op.GREATER_THAN, e.getKey())) {
-						throw new DbException("attempt to insert invalid entry with left child " + 
+						throw new DbException("attempt to insert invalid entry with left child " +
 								e.getLeftChild().getPageNumber() + ", right child " +
 								e.getRightChild().getPageNumber() + " and key " + e.getKey() +
 								" HINT: one of these children must match an existing child on the page" +
 								" and this key must be correctly ordered in between that child's" +
 								" left and right keys");
 					}
+					// 记录匹配到的槽索引
 					lessOrEqKey = i;
+					// 如果当前槽中存储的是右子页面的编号，则更新为左子页面的编号
 					if(children[i] == e.getRightChild().getPageNumber()) {
 						children[i] = e.getLeftChild().getPageNumber();
 					}
 				}
+				// 如果已经找到匹配槽（lessOrEqKey != -1）但当前槽的孩子不匹配
 				else if(lessOrEqKey != -1) {
-					// validate that the next key is greater than or equal to the one we are inserting
+					// 验证接下来的键必须大于或等于待插入的键，否则顺序不对，抛出异常
 					if(keys[i].compare(Op.LESS_THAN, e.getKey())) {
-						throw new DbException("attempt to insert invalid entry with left child " + 
+						throw new DbException("attempt to insert invalid entry with left child " +
 								e.getLeftChild().getPageNumber() + ", right child " +
 								e.getRightChild().getPageNumber() + " and key " + e.getKey() +
 								" HINT: one of these children must match an existing child on the page" +
 								" and this key must be correctly ordered in between that child's" +
 								" left and right keys");
 					}
+					// 一旦检测到后续键满足要求，就退出循环
 					break;
 				}
 			}
 		}
 
+		// 如果遍历结束后还未找到匹配的槽，说明条目无效，抛出异常
 		if(lessOrEqKey == -1) {
-			throw new DbException("attempt to insert invalid entry with left child " + 
+			throw new DbException("attempt to insert invalid entry with left child " +
 					e.getLeftChild().getPageNumber() + ", right child " +
 					e.getRightChild().getPageNumber() + " and key " + e.getKey() +
 					" HINT: one of these children must match an existing child on the page" +
@@ -527,25 +563,34 @@ public class BTreeInternalPage extends BTreePage {
 
 		// shift entries back or forward to fill empty slot and make room for new entry
 		// while keeping entries in sorted order
+		// 移动页面中的条目以填补空槽，并为新条目腾出位置，同时保持条目的排序顺序
 		int goodSlot = -1;
 		if(emptySlot < lessOrEqKey) {
+			// 如果空槽位于匹配槽之前，则将匹配槽之前的所有条目向后移动
 			for(int i = emptySlot; i < lessOrEqKey; i++) {
 				moveEntry(i+1, i);
 			}
+			// 插入位置即为原来的匹配槽位置
 			goodSlot = lessOrEqKey;
 		}
 		else {
+			// 如果空槽位于匹配槽之后，则将匹配槽之后的条目向前移动
 			for(int i = emptySlot; i > lessOrEqKey + 1; i--) {
 				moveEntry(i-1, i);
 			}
+			// 插入位置为匹配槽之后一个位置
 			goodSlot = lessOrEqKey + 1;
 		}
 
 		// insert new entry into the correct spot in sorted order
+		// 在确定的插入位置 goodSlot 处插入新条目
 		markSlotUsed(goodSlot, true);
 		Debug.log(1, "BTreeLeafPage.insertEntry: new entry, tableId = %d pageId = %d slotId = %d", pid.getTableId(), pid.getPageNumber(), goodSlot);
+		// 将新条目的键写入 keys 数组中
 		keys[goodSlot] = e.getKey();
+		// 将新条目的右子页面编号存入 children 数组中
 		children[goodSlot] = e.getRightChild().getPageNumber();
+		// 更新条目的 RecordId 为当前页面和插入位置 goodSlot
 		e.setRecordId(new RecordId(pid, goodSlot));
 	}
 

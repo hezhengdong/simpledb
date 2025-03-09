@@ -12,6 +12,7 @@ import java.util.*;
 import java.io.*;
 
 /**
+ * BTreeLeafPage 的每个实例存储 BTreeFile 的一个页面的数据，并实现 BufferPool 使用的页面接口。<br>
  * Each instance of BTreeLeafPage stores data for one page of a BTreeFile and 
  * implements the Page interface that is used by BufferPool.
  *
@@ -21,12 +22,20 @@ import java.io.*;
  */
 public class BTreeLeafPage extends BTreePage {
 	private final byte[] header;
-	private final Tuple[] tuples;
-	private final int numSlots;
+	private final Tuple[] tuples; // 存储元组
+	private final int numSlots; // 最多可容纳的元组数
 	
-	private int leftSibling; // leaf node or 0
-	private int rightSibling; // leaf node or 0
+	private int leftSibling; // 存储当前叶子节点的左兄弟页面 ID，如果是首节点，值为 0。
+	private int rightSibling; // 存储当前叶子节点的右兄弟页面 ID，如果是尾节点，值为 0。
 
+	/**
+	 * 检查页面的正确性。确保叶子节点中的元组指定字段顺序排列。
+	 * @param fieldid
+	 * @param lowerBound
+	 * @param upperBound
+	 * @param checkoccupancy
+	 * @param depth
+	 */
 	public void checkRep(int fieldid, Field lowerBound, Field upperBound, boolean checkoccupancy, int depth) {
 		Field prev = lowerBound;
 		assert(this.getId().pgcateg() == BTreePageId.LEAF);

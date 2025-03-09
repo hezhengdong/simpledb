@@ -18,16 +18,16 @@ import simpledb.transaction.TransactionId;
  *
  */
 public abstract class BTreePage implements Page {
-	protected volatile boolean dirty = false;
-	protected volatile TransactionId dirtier = null;
+	protected volatile boolean dirty = false; // 是否为脏页
+	protected volatile TransactionId dirtier = null; // 造成脏页的事务 ID
 
 	protected final static int INDEX_SIZE = Type.INT_TYPE.getLen();
 
 	protected final BTreePageId pid;
 	protected final TupleDesc td;
-	protected final int keyField;
+	protected final int keyField; // 指定元组中索引为几的字段为索引
 
-	protected int parent; // parent is always internal node or 0 for root node
+	protected int parent; // 父节点页面 ID，parent is always internal node or 0 for root node
 	protected byte[] oldData;
 	protected final Byte oldDataLock= (byte) 0;
 

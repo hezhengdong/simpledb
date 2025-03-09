@@ -201,10 +201,12 @@ public class BTreeFileEncoder {
 	public static BTreeFile convert(File inFile, File hFile, File bFile, int npagebytes,
 			int numFields, Type[] typeAr, char fieldSeparator, int keyField) 
 					throws IOException, DbException, TransactionAbortedException {
+		// 1. 将原始文件转换为堆文件
 		// convert the inFile to HeapFile first.
 		HeapFileEncoder.convert(inFile, hFile, BufferPool.getPageSize(), numFields);
 		HeapFile heapf = Utility.openHeapFile(numFields, hFile);
 
+		// 2. 读取堆文件并排序元组
 		// read all the tuples from the heap file and sort them on the keyField
 		List<Tuple> tuples = new ArrayList<>();
 		TransactionId tid = new TransactionId();
@@ -217,30 +219,37 @@ public class BTreeFileEncoder {
 		it.close();
 		tuples.sort(new TupleComparator(keyField));
 
+		// 3. 创建 B+ 树文件
 		// add the tuples to B+ tree file
 		BTreeFile bf = BTreeUtility.openBTreeFile(numFields, bFile, keyField);
 		Type keyType = typeAr[keyField];
 		int tableid = bf.getId();
 
+		// 4. 计算每个页面可以存储的记录数量
 		int nrecbytes = 0;
 		for (int i = 0; i < numFields ; i++) {
 			nrecbytes += typeAr[i].getLen();
 		}
 		// pointerbytes: left sibling pointer, right sibling pointer, parent pointer
 		int leafpointerbytes = 3 * BTreeLeafPage.INDEX_SIZE; 
+		// 4.1 每个叶子页面能存储的最大记录数
 		int nrecords = (npagebytes * 8 - leafpointerbytes * 8) /  (nrecbytes * 8 + 1);  //floor comes for free
 
+		// 4.2 每条元组占用的字节数
 		int nentrybytes = keyType.getLen() + BTreeInternalPage.INDEX_SIZE;
 		// pointerbytes: one extra child pointer, parent pointer, child page category
 		int internalpointerbytes = 2 * BTreeLeafPage.INDEX_SIZE + 1; 
+		// 4.3 每个内部页面可容纳的最大条目数
 		int nentries = (npagebytes * 8 - internalpointerbytes * 8 - 1) /  (nentrybytes * 8 + 1);  //floor comes for free
 
 		List<List<BTreeEntry>> entries = new ArrayList<>();
 
+		// 5. 创建根指针页面
 		// first add some bytes for the root pointer page
 		bf.writePage(new BTreeRootPtrPage(BTreeRootPtrPage.getId(tableid), 
 				BTreeRootPtrPage.createEmptyPageData()));
 
+		// 6. 分批次写入叶子节点和内部节点
 		// next iterate through all the tuples and write out leaf pages
 		// and internal pages as they fill up.
 		// We wait until we have two full pages of tuples before writing out the first page
@@ -250,21 +259,27 @@ public class BTreeFileEncoder {
 		List<Tuple> page2 = new ArrayList<>();
 		BTreePageId leftSiblingId = null;
 		for(Tuple tup : tuples) {
+			// 6.1 当 page1 被写满后
 			if(page1.size() < nrecords) {
 				page1.add(tup);
 			}
 			else if(page2.size() < nrecords) {
 				page2.add(tup);
 			}
+			// 6.2 将 page1 写入 B+ 树，并将 page2 中的第一个元组作为新的条目插入父节点
 			else {
 				// write out a page of records
+				// 1. 将 page1 转换为叶子节点的页面，并写入 B+ 树文件中
 				byte[] leafPageBytes = convertToLeafPage(page1, npagebytes, numFields, typeAr, keyField);
 				BTreePageId leafPid = new BTreePageId(tableid, bf.numPages() + 1, BTreePageId.LEAF);
 				BTreeLeafPage leafPage = new BTreeLeafPage(leafPid, leafPageBytes, keyField);
 				leafPage.setLeftSiblingId(leftSiblingId);
 				bf.writePage(leafPage);
+
+				// 2. 该变量用于链接前一个叶子节点，保持叶子节点之间的双向链表关系
 				leftSiblingId = leafPid;
 
+				// 3. 更新父节点：通过 updateEntries 函数，将 page2 的第一个元组的键值（作为新条目）“复制”到父节点。
 				// update the parent by "copying up" the next key
 				BTreeEntry copyUpEntry = new BTreeEntry(page2.get(0).getField(keyField), leafPid, null);
 				updateEntries(entries, bf, copyUpEntry, 0, nentries, npagebytes, 
@@ -276,6 +291,7 @@ public class BTreeFileEncoder {
 			}
 		}
 
+		// 7. 处理剩余的页面
 		// now we need to deal with the end cases. There are two options:
 		// 1. We have less than or equal to a full page of records. Because of the way the code
 		//    was written above, we know this must be the only page
@@ -284,6 +300,7 @@ public class BTreeFileEncoder {
 		// For case (2), we divide the remaining records equally between the last two pages,
 		// write them out, and update the parent's child pointers.
 		BTreePageId lastPid = null;
+		// 7.1 如果最后一个页面为空，则直接将剩余的 page1 作为最后一个叶子节点写入
 		if(page2.size() == 0) {
 			// write out a page of records - this is the root page
 			byte[] lastPageBytes = convertToLeafPage(page1, npagebytes, numFields, typeAr, keyField);
@@ -293,6 +310,7 @@ public class BTreeFileEncoder {
 			bf.writePage(lastPage);
 		}
 		else {
+			// 7.2 如果有两个页面，则将它们分成两部分，生成两个页面并写入。
 			// split the remaining tuples in half
 			int remainingTuples = page1.size() + page2.size();
             List<Tuple> lastPg = new ArrayList<>();
@@ -300,6 +318,7 @@ public class BTreeFileEncoder {
 			lastPg.addAll(page1.subList(remainingTuples/2, page1.size()));
 			lastPg.addAll(page2);
 
+			// 写入 page1
 			// write out the last two pages of records
 			byte[] secondToLastPageBytes = convertToLeafPage(secondToLastPg, npagebytes, numFields, typeAr, keyField);
 			BTreePageId secondToLastPid = new BTreePageId(tableid, bf.numPages() + 1, BTreePageId.LEAF);
@@ -307,21 +326,26 @@ public class BTreeFileEncoder {
 			secondToLastPage.setLeftSiblingId(leftSiblingId);
 			bf.writePage(secondToLastPage);
 
+			// 写入 page2
 			byte[] lastPageBytes = convertToLeafPage(lastPg, npagebytes, numFields, typeAr, keyField);
 			lastPid = new BTreePageId(tableid, bf.numPages() + 1, BTreePageId.LEAF);
 			BTreeLeafPage lastPage = new BTreeLeafPage(lastPid, lastPageBytes, keyField);
 			lastPage.setLeftSiblingId(secondToLastPid);
 			bf.writePage(lastPage);
 
+			// 7.3 更新父节点：将剩余叶子页面的第一个元组的键值作为条目“复制”到父节点。
 			// update the parent by "copying up" the next key
 			BTreeEntry copyUpEntry = new BTreeEntry(lastPg.get(0).getField(keyField), secondToLastPid, lastPid);
 			updateEntries(entries, bf, copyUpEntry, 0, nentries, npagebytes, 
 					keyType, tableid, keyField);
 		}
 
+		// 8. 更新父节点和清理 B+ 树条目
 		// Write out the remaining internal pages
 		cleanUpEntries(entries, bf, nentries, npagebytes, keyType, tableid, keyField);
 
+		// 9. 更新根指针并设置父节点和兄弟节点指针
+		// 9.1 更新根指针：根据当前页面数量，决定根指针是指向内部节点还是叶子节点。convertToRootPtrPage 函数将根指针页的内容转换成字节并写入到 B+ 树文件中。
 		// update the root pointer to point to the last page of the file
 		int root = bf.numPages();
 		int rootCategory = (root > 1 ? BTreePageId.INTERNAL : BTreePageId.LEAF);
@@ -329,10 +353,14 @@ public class BTreeFileEncoder {
 		bf.writePage(new BTreeRootPtrPage(BTreeRootPtrPage.getId(tableid), rootPtrBytes));
 
 		// set all the parent and sibling pointers
+		// 9.2 setParents：递归地为每个页面设置父节点指针。它会遍历所有内部节点和叶子节点，并将它们的父节点设置为当前节点。
 		setParents(bf, new BTreePageId(tableid, root, rootCategory), BTreeRootPtrPage.getId(tableid));
+		// 9.3 setRightSiblingPtrs：设置叶子节点之间的兄弟指针（右兄弟指针）。通过左兄弟页面的 ID，设置右兄弟指针，完成叶子节点之间的双向链表。
 		setRightSiblingPtrs(bf, lastPid, null);
 
+		// 重置缓冲池，清除所有缓存的页面。
 		Database.resetBufferPool(BufferPool.DEFAULT_PAGES);
+		// 返回构建好的 B+ 树文件
 		return bf;
 	}
 

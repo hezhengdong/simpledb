@@ -6,11 +6,13 @@ import simpledb.storage.RecordId;
 import java.io.Serializable;
 
 /**
+ * 表示 B+ 树内部节点中的一个条目。每个条目包含一个键和两个子节点页面的 ID。<br>
+ * 被用于 BTreeInternalPage，存储索引信息，存储一个键值和对应的两个子页面的指针。<br>
  * Each instance of BTreeEntry stores one key and two child page ids. It is used
  * by BTreeInternalPage as an abstraction to iterate through the entries stored inside. 
  * All of the entries or tuples in the left child page should be less than or equal to 
  * the key, and all of the entries or tuples in the right child page should be greater 
- * than or equal to the key.
+ * than or equal to the key.<br>
  * 
  * Note that updating a BTreeEntry does not actually change the data stored on the page 
  * identified by its recordId. After updating a BTreeEntry object, you must call 
@@ -31,16 +33,19 @@ public class BTreeEntry implements Serializable {
 
 	/**
 	 * The left child page id
+	 * leftChild 所指向的页面上的元组都比该条目上的键小。
 	 * */
 	private BTreePageId leftChild;
 
 	/**
 	 * The right child page id
+	 * rightChild 所指向的页面上的元组都比该条目上的键大。
 	 * */
 	private BTreePageId rightChild;
 
 	/**
 	 * The record id of this entry
+	 * 记录该条目在数据库中存储的实际位置。
 	 * */
 	private RecordId rid; // null if not stored on any page
 
