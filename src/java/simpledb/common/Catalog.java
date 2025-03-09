@@ -84,6 +84,15 @@ public class Catalog {
      */
     public void addTable(DbFile file, String name, String pkeyField) {
         // some code goes here
+        // 如果表有重名，则新表覆盖旧表（遍历是最低效的方法，图方便，应当重构一遍表的存储逻辑。）
+        Iterator<Integer> it = tables.keySet().iterator();
+        while (it.hasNext()) {
+            int id = it.next();
+            Table table = tables.get(id);
+            if (table.getName().equals(name)) {
+                it.remove(); // 删除旧条目
+            }
+        }
         Table table = new Table(file, name, pkeyField);
         tables.put(file.getId(), table);
     }
