@@ -99,17 +99,9 @@ public class BufferPool {
             lockType = Permissions.READ_WRITE.ordinal();
         }
 
-        // 设置超时时间（1秒）
-        long timeout = 1000;
-        long startTime = System.currentTimeMillis();
-        // 尝试为页面设置锁
+        // 没有获得锁，抛出异常
         while (!lockManager.setLock(pid, tid, lockType)) {
-            // 检查是否超过了超时时间
-            long elapsedTime = System.currentTimeMillis() - startTime;
-            if (elapsedTime > timeout) {
-                // 如果超过超时时间，抛出异常
-                throw new TransactionAbortedException();
-            }
+            throw new TransactionAbortedException();
         }
 
         // 如果页面存在
@@ -288,7 +280,7 @@ public class BufferPool {
         }
     }
 
-    /** 
+    /**
      *  从缓冲池中移除页面而不将其刷新到磁盘（丢弃修改）（Lab2.5要求实现，说后面会用到）
      *  Remove the specific page id from the buffer pool.
         Needed by the recovery manager to ensure that the
@@ -303,12 +295,12 @@ public class BufferPool {
         // not necessary for lab1
         // 从页面存储中移除
         Page removed = pageStore.remove(pid);
-        
+
         // 从LRU缓存中移除
         synchronized (lruCache) {
             lruCache.remove(pid);
         }
-        
+
         // 如果被移除的是脏页，需要清理相关状态
         if (removed != null && removed.isDirty() != null) {
             // 注意：这里不刷盘，直接丢弃修改
@@ -384,22 +376,9 @@ public class BufferPool {
             lruCache.remove(removePid);
             pageStore.remove(removePid);
         }
-        // 如果没有找到可以淘汰的页面，说明缓冲池中剩下的都是脏页，开始淘汰脏页。
+        // 如果没有找到可以淘汰的页面，说明缓冲池中剩下的都是脏页，按照 Lab 要求，抛出异常
         else {
-            // 获取脏页 ID，即 lruCache 的第一个元素
-            for (PageId pid : lruCache.keySet()) {
-                removePid = pid;
-                break;
-            }
-            // 刷新脏页到磁盘上
-            try {
-                flushPage(removePid);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-            // 从缓冲池和 LRU 中移除脏页
-            lruCache.remove(removePid);
-            pageStore.remove(removePid);
+            throw new DbException("All pages are dirty, cannot evict a page");
         }
     }
 
