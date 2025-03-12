@@ -322,16 +322,16 @@ public class BufferPool {
             return; // 页面不在缓存中
         }
 
-        // 仅处理脏页
-        if (page.isDirty() != null) {
+        // 将更新记录附加到日志中，其中包含 before-image 和 after-image。
+        // append an update record to the log, with a before-image and after-image.
+        TransactionId dirtier = page.isDirty();
+        if (dirtier != null){ // 只处理脏页
+            Database.getLogFile().logWrite(dirtier, page.getBeforeImage(), page);
+            Database.getLogFile().force();
             // 获取对应的数据库文件
             DbFile dbFile = Database.getCatalog().getDatabaseFile(pid.getTableId());
             // 写入磁盘
             dbFile.writePage(page);
-            // 事务中会用到，作用：保存当前页面状态作为前镜像，以便在事务回滚时，恢复到刷盘前的状态
-            page.setBeforeImage();
-            // 清除脏页标记，脏页变为了缓冲池中的正常页
-            page.markDirty(false, null);
         }
     }
 
@@ -346,6 +346,10 @@ public class BufferPool {
             Page page = pageStore.get(pid);
             if (page.isDirty() != null && page.isDirty().equals(tid)) {
                 flushPage(pid);
+                // 保存当前页面状态作为前镜像，便于事务回滚
+                page.setBeforeImage();
+                // 清除脏页标记
+                page.markDirty(false, null);
             }
         }
     }

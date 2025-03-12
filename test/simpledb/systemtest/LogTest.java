@@ -107,9 +107,9 @@ public class LogTest extends SimpleDbTestBase {
         abort(t);
     }
 
-    // simulate crash
-    // restart Database
-    // run log recovery
+    // simulate crash 模拟崩溃
+    // restart Database 重启数据库
+    // run log recovery 运行日志恢复
     void crash()
         throws IOException {
         Database.reset();
