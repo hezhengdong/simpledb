@@ -169,7 +169,9 @@ public class TableStats {
         // 第一次扫描：收集字段的min/max值
         Map<Integer, Integer> mins = new HashMap<>(); // 记录每个字段的最小值
         Map<Integer, Integer> maxs = new HashMap<>(); // 记录每个字段的最大值
-        TransactionId tid = new TransactionId(); // 创建事务ID
+        Transaction t = new Transaction();
+        t.start();
+        TransactionId tid = t.getId(); // 创建事务ID
         SeqScan scan = new SeqScan(tid, tableid); // 创建顺序扫描
         try {
             scan.open(); // 打开扫描器
@@ -216,6 +218,7 @@ public class TableStats {
                 }
             }
             scan.close();
+            t.commit();
         } catch (Exception e) {
             e.printStackTrace();
         }
