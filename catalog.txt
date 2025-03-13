@@ -1,1 +1,2 @@
-data(f1 int, f2 int)
+emp(id int, name string, age int, dept_id int)
+dept(id int, name string)
