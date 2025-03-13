@@ -455,20 +455,20 @@ public class Parser {
                     throw new ParsingException(
                             "No transaction is currently running");
                 curtrans.commit();
-                curtrans = null;
                 inUserTrans = false;
                 System.out.println("Transaction " + curtrans.getId().getId()
                         + " committed.");
+                curtrans = null;
                 break;
             case "ROLLBACK":
                 if (curtrans == null)
                     throw new ParsingException(
                             "No transaction is currently running");
                 curtrans.abort();
-                curtrans = null;
                 inUserTrans = false;
                 System.out.println("Transaction " + curtrans.getId().getId()
                         + " aborted.");
+                curtrans = null;
 
                 break;
             case "SET TRANSACTION":
