@@ -99,9 +99,26 @@ public class BufferPool {
             lockType = Permissions.READ_WRITE.ordinal();
         }
 
-        // 没有获得锁，抛出异常
-        while (!lockManager.setLock(pid, tid, lockType)) {
-            throw new TransactionAbortedException();
+        // 事务尝试获取锁。如果未成功获取，则循环尝试；每次检查是否有死锁。
+        while (true) {
+            // 成功获得锁，退出循环
+            if (lockManager.tryAcquireLock(pid, tid, lockType)) {
+                //System.out.println("成功获得锁");
+                break;
+            }
+            // 检测死锁
+            if (lockManager.detectDeadlock(tid)) {
+                //System.out.println("检测到了死锁");
+                throw new TransactionAbortedException();
+            }
+            // 如果未检测到死锁，稍微等待一下再重试，避免忙等待
+            try {
+                //System.out.println("重试");
+                Thread.sleep(50); // 时间过短，消耗 CPU 占用；时间过长，尝试次数太少。
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new TransactionAbortedException();
+            }
         }
 
         // 如果页面存在
