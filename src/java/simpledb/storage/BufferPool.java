@@ -9,10 +9,8 @@ import simpledb.transaction.TransactionId;
 
 import java.io.*;
 
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.LinkedHashMap;
-import java.util.Iterator;
 
 /**
  * BufferPool 负责管理从磁盘向内存读写页面。
@@ -43,21 +41,38 @@ public class BufferPool {
     // 存储具体页面
     private final ConcurrentHashMap<PageId, Page> pageStore = new ConcurrentHashMap<>();
     // 存储页ID到元数据的映射
-    private final ConcurrentHashMap<PageId, PageMetadata> accessHistory = new ConcurrentHashMap<>();
-    // 存储页面的访问顺序，键为 PageId，值无实际意义
-    private final LinkedHashMap<PageId, Boolean> lruQueue = new LinkedHashMap<>(16, 0.75f, true);
-    // 存储历史队列
-    private final LinkedHashMap<PageId, Boolean> historyQueue = new LinkedHashMap<>(16, 0.75f, true);
+    private final ConcurrentHashMap<PageId, PageMetadata> metaStore = new ConcurrentHashMap<>();
+    // 优先级队列
+    private final PriorityQueue<PageId> priorityQueue = new PriorityQueue<>(
+            // 比较器，定义队列中元素的排序规则
+            new Comparator<PageId>() {
+                // compare 方法，返回值 < 0，表示 id1 在 id2 之前。
+                @Override
+                public int compare(PageId id1, PageId id2) {
+                    // 获取元数据
+                    PageMetadata meta1 = metaStore.get(id1);
+                    PageMetadata meta2 = metaStore.get(id2);
+                    /* 队列数据结构，尾部添加，头部淘汰。
+                       - 主排序：降序排序，优先淘汰“反向K距离”最大的页
+                       - 次级排序：升序排序，优先淘汰时间戳最小的页
+                     */
+                    // 主排序：比较两个页面的“反向K距离”
+                    int cmp = Long.compare(meta2.getBackwardKDistance(), meta1.getBackwardKDistance());
+                    // 如果二者不相等，返回主排序结果
+                    if (cmp != 0) {
+                        return cmp;
+                    } else {
+                        // 如果二者相等，进入次级排序
+                        // 次级排序：比较两个页面的时间戳
+                        return Long.compare(meta1.getLastAccessTime(), meta2.getLastAccessTime());
+                    }
+                }
+            }
+    );
 
     private final int K = 2;
 
     private LockManager lockManager = new LockManager();
-
-    static class PageMetadata {
-        int accessCount = 0;      // 访问次数
-        long lastAccessTime = 0;  // 最后一次访问时间（用于历史队列排序）
-        long kthAccessTime = 0;   // 第K次访问时间（用于主队列排序）
-    }
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -133,74 +148,44 @@ public class BufferPool {
             }
         }
 
+        long currentTime = System.currentTimeMillis();
+
         // 如果页面存在
-        if (lruQueue.containsKey(pid)) {
-            // 更新 LRU 缓存
-            updateAccess(pid);
-            return pageStore.get(pid);
-        }
-
-        // 如果缓冲池已满，进行页面淘汰
-        if (pageStore.size() >= numPages) {
-            evictPage();
-        }
-
-        // 如果页面不存在
-
-        // 获取数据库文件并读取新页面
-        DbFile dbFile = Database.getCatalog().getDatabaseFile(pid.getTableId());
-        Page page = dbFile.readPage(pid);
-
-        // 更新缓存
-        pageStore.put(pid, page);
-        // 新增 LRU 缓存
-        updateAccess(pid);
-
-        return page;
-    }
-
-    /**
-     * 辅助方法：更新页面的访问记录，支持 LRU-K 策略。
-     * <p>
-     * 1. 如果页面已在 lruQueue 中，则直接通过访问 get(pid) 更新顺序；<br>
-     * 2. 如果页面在 historyQueue 中，则增加其访问次数并更新最后访问时间，
-     *    当访问次数达到 K 时，从 historyQueue 中移除并加入 lruQueue，同时记录 kthAccessTime；<br>
-     * 3. 如果页面未出现在任何队列中，则将其作为新页面加入 historyQueue，
-     *    并在 accessHistory 中记录访问次数为 1 和当前时间。<br>
-     *
-     * @param pid 页面 ID
-     */
-    private synchronized void updateAccess(PageId pid) {
-        // 页面已在 lruQueue 中，直接更新顺序
-        if (lruQueue.containsKey(pid)) {
-            lruQueue.get(pid);  // 通过 get() 更新访问顺序
-            return;
-        }
-        // 页面在 historyQueue 中，更新访问历史
-        if (historyQueue.containsKey(pid)) {
-            PageMetadata meta = accessHistory.get(pid);
+        if (pageStore.containsKey(pid)) {
+            PageMetadata meta = metaStore.get(pid);
+            // 本来不应该有meta==null这个判断，但是报错了，没检索到问题在哪里，先这样妥协吧。
             if (meta == null) {
-                meta = new PageMetadata();
-            }
-            meta.accessCount++;
-            meta.lastAccessTime = System.currentTimeMillis();
-            // 当访问次数达到或超过 K 时，迁移到 lruQueue
-            if (meta.accessCount >= K) {
-                historyQueue.remove(pid);
-                accessHistory.remove(pid);
-                meta.kthAccessTime = System.currentTimeMillis();
-                lruQueue.put(pid, true);
+                meta = new PageMetadata(K, currentTime);
+                metaStore.put(pid, meta);
+                priorityQueue.add(pid);
             } else {
-                historyQueue.get(pid);  // 更新顺序
+                meta.updateAccess(currentTime);
             }
-            return;
+            return pageStore.get(pid);
+        } else {
+            // 如果页面不存在
+
+            // 若空间不足，淘汰页面
+            if (pageStore.size() >= numPages) {
+                try {
+                    evictPage();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+
+            // 从磁盘中读取页面
+            DbFile dbFile = Database.getCatalog().getDatabaseFile(pid.getTableId());
+            Page page = dbFile.readPage(pid);
+            pageStore.put(pid, page);
+
+            // 添加元数据相关信息
+            PageMetadata meta = new PageMetadata(K, currentTime);
+            metaStore.put(pid, meta);
+            priorityQueue.add(pid);
+
+            return page;
         }
-        // 页面未出现在任一队列中，则作为新页面加入 historyQueue
-        historyQueue.put(pid, true);
-        PageMetadata meta = new PageMetadata();
-        meta.accessCount++;
-        meta.lastAccessTime = System.currentTimeMillis();
-        accessHistory.put(pid, meta);
     }
 
     /**
@@ -365,9 +350,8 @@ public class BufferPool {
         // not necessary for lab1
         // 从缓存中移除
         Page removed = pageStore.remove(pid);
-        lruQueue.remove(pid);
-        historyQueue.remove(pid);
-        accessHistory.remove(pid);
+        metaStore.remove(pid);
+        priorityQueue.remove(pid);
 
         // 如果被移除的是脏页，需要清理相关状态
         if (removed != null && removed.isDirty() != null) {
@@ -430,44 +414,19 @@ public class BufferPool {
      * Discards a page from the buffer pool.
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
-    private synchronized void evictPage() throws DbException {
-        PageId removePid = null;
+    private synchronized void evictPage() throws DbException, IOException {
 
-        // 优先在 historyQueue 中查找
-        for (PageId pid : historyQueue.keySet()) {
-            Page page = pageStore.get(pid);
-            if (page.isDirty() == null) {
-                removePid = pid;
-                break;
-            }
-        }
-
-        // 排除脏页，淘汰页面
-        if (removePid != null) {
-            historyQueue.remove(removePid);
-            accessHistory.remove(removePid.hashCode());
-            pageStore.remove(removePid);
+        PageId removePid = priorityQueue.poll();
+        if (removePid == null) {
             return;
         }
 
-        // 若 historyQueue 无可淘汰页面，则检查 lruQueue
-        for (PageId pid : lruQueue.keySet()) {
-            Page page = pageStore.get(pid);
-            if (page.isDirty() == null) {
-                removePid = pid;
-                break;
-            }
+        if (pageStore.get(removePid).isDirty() != null) {
+            flushPage(removePid);
         }
 
-        // 排除脏页，淘汰页面
-        if (removePid != null) {
-            lruQueue.remove(removePid);
-            pageStore.remove(removePid);
-            return;
-        }
-
-        // 缓冲池中全是脏页，抛出异常
-        throw new DbException("All pages are dirty, cannot evict a page");
+        pageStore.remove(removePid);
+        metaStore.remove(removePid);
     }
 
 }
